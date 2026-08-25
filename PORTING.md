@@ -5,6 +5,30 @@ Java 17 的 PromQL 解析/打印库。本文记录：源文件 ↔ Java 类型�
 逐条已知分歧、以及一致性测试的提取管线。领域术语见 [CONTEXT.md](CONTEXT.md)，
 设计决策见 `docs/adr/`。
 
+## 0. 上游版本锚点（迭代基准）
+
+- **快照版本：Prometheus main@2026-08-25**（v3.14.0 于 2026-08-17 发布后、
+  3.15 开发线起点）。**本库移植基准 = 该快照本身**（不是 tag）。
+- **快照 vs v3.14.0 tag 的实测差异**（`bash scripts/check-snapshot.sh
+  v3.14.0` 逐文件比对：移植范围 19 文件中 6 个有差异）：
+  `parser/parse.go`（新增 `wrapParenDurationExpr` 等）、
+  `parser/generated_parser.y`/`.y.go`、`parser/parse_test.go`、
+  `parser/prettier.go`、`parser/printer_test.go`——即 v3.14.0 发布后合入
+  main 的 parser 增量，**已随快照一并移植**（如
+  `Parser.wrapParenDurationExpr`）。其余 13 文件（`lex.go`、`ast.go`、
+  `printer.go`、`functions.go`、`posrange/`、`durations.go` 等）与 tag
+  逐字一致。
+- **duration 表达式口径**：上游 3.14.0 起 `promql-duration-expr` 特性 flag
+  已成 no-op（默认启用，#19033），但那只在 cmd 接线层——parser 层
+  `ExperimentalDurationExpr` 门禁（"experimental duration expression is
+  not enabled"）在 v3.14.0 依然保留。本库 `ParserOptions` 默认全关，镜像
+  的是 parser 层 API 默认值，而非 Prometheus server 的 CLI 默认值——这是
+  有意的移植口径（调用方显式开启），非漂移。
+- **后续迭代**：上游发新版本时先跑 `bash scripts/check-snapshot.sh v3.15.0`，
+  输出的 DRIFT 清单 = 该版本相对本快照的上游改动（对照上表已列差异甄别
+  方向）；等价于 `git diff <main@2026-08-25>..<新tag> -- promql/parser/`。
+  每次同步后在本文记录新的锚点。
+
 ## 1. 范围
 
 移植对象是 `docs/promql/parser/`（+ 少量上游 `model/labels` 语义）：词法、
@@ -63,10 +87,21 @@ Java 17 的 PromQL 解析/打印库。本文记录：源文件 ↔ Java 类型�
    （"invalid UTF-8 rune"）；Java `String` 无法承载非法 UTF-8 字节序列，
    提取器已剔除这两条（`extract_cases.py` 输出 `dropped_utf8 2`）。
 
-4. **深递归受 JVM 栈限制。**
+4. **深递归受 JVM 栈限制（不设阈值，解法＝加大栈）。**
    Go 协程栈可动态增长，官方压力用例（万层 `-{}-1` 链 + 千层 `[1m:]`）在
-   Go 中可行；JVM 线程栈固定，`mvn test` 已在 surefire 配置 `-Xss32m`。
-   库使用者解析极深表达式时可能需要 `new Thread(null, r, "parser", 32 << 20)`。
+   Go 中可行；JVM 线程栈固定。真实 PromQL 深度极浅（官方用例表实测最深
+   3 层），该限制只影响病态/恶意输入。**决议：不加深度阈值**——保持与 Go
+   同等的"看平台资源"能力（Go 看内存，Java 看栈），超深输入以
+   `StackOverflowError` 失败，解法是加大解析线程的栈：
+
+   - JVM 全局：启动参数 `java -Xss32m`；
+   - 单线程：`new Thread(null, task, "promql-parser", 32L << 20)`
+     （第 4 参即 stackSize）；
+   - 线程池：`ThreadFactory` 内统一走上述构造，再交给
+     `Executors.newFixedThreadPool(n, factory)`。
+
+   测试侧的 surefire `-Xss32m` 即该解法的应用（`promql-core/pom.xml`）。
+   消费方（`Printer`、`Walk`/`Inspector`）递归深度与 AST 深度同阶，同样适用。
 
 5. **打印回读：非 legacy 标签名加引号（快照反推）。**
    上游 `labels` 包未 vendored，`Matcher.String()` 的行为由快照
@@ -87,6 +122,13 @@ Java 17 的 PromQL 解析/打印库。本文记录：源文件 ↔ Java 类型�
    `NaN` 字面量；数值上溢报 "value out of range"（与 Go 一致）；下溢
    （如 `1e-400`）Go 返回 0 且不报错，Java `Double.parseDouble` 同为 0，
    行为一致但实现的舍入路径不同。`parseGoInt64` 支持 0x/0b/0o/前导 0 八进制。
+   格式化侧（`formatFloatF/G`）以 **Go 真 oracle 黄金向量**背书：
+   `scripts/gen_gofloat_vectors.go`（固定种子）生成 10049 条边界+随机向量
+   （`gofloat_vectors.tsv`），`GoFloatVectorTest` 全量比对 `'f'`/`'g'`
+   输出并做解析往返。该向量集首次接入即抓出三处手工推导错误并已修复：
+   负数小数指数偏移一位（`-123456.789` 误入科学分支）、次正规数最短位数
+   （Java "4.9E-324" vs Go "5E-324"）、无小数点形态的科学指数（`1e6`
+   误作 `1e+04`）——正是 B11 存在的理由。
 
 8. **`ShortString()` 裁剪。**
    Go printer.go 的 `ShortString` 系列（调试用途，快照内无生产调用方）按
@@ -115,6 +157,10 @@ docs/promql/parser/parse_test.go ──extract_cases.py──▶ parse_test_case
         │                                    + 8 组实战查询双向往返）
         └── printer_test.go ──手工移植──▶ PrinterGoldenTest（92 例，打印黄金输出）
                                            + AstToStringTest（14 组，手造 AST→字符串）
+
+scripts/gen_gofloat_vectors.go ──go run──▶ gofloat_vectors.tsv（10049 条）
+                                                    │
+                                        GoFloatVectorTest（Go strconv 黄金向量）
 ```
 
 - `extract_cases.py`：解析 Go `testExpr` 表（含 `fmt.Sprintf`/`strings.Repeat`

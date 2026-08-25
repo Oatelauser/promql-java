@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.promql</groupId>
+        <artifactId>promql-java</artifactId>
+        <version>0.1.0</version>
+    </parent>
+
+    <artifactId>prometheus-api</artifactId>
+    <packaging>jar</packaging>
+
+    <name>prometheus-api</name>
+    <description>Prometheus HTTP API 客户端：基于 PromQL AST 的响应类型推断 + 全量结果类型绑定。
+        传输层抽象（默认 java.net.http.HttpClient 实现），JSON 解析经 Gson 树模式。</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.promql</groupId>
+            <artifactId>promql-core</artifactId>
+        </dependency>
+        <!-- 树模式（JsonElement）专用，不做 databind；Q21 决定 -->
+        <dependency>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+        </dependency>
+    </dependencies>
+</project>

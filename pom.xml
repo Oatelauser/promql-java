@@ -7,43 +7,65 @@
     <groupId>com.promql</groupId>
     <artifactId>promql-java</artifactId>
     <version>0.1.0</version>
-    <packaging>jar</packaging>
+    <packaging>pom</packaging>
 
     <name>promql-java</name>
-    <description>PromQL 解析/打印库：PromQL 字符串 ⇄ AST。移植自 Prometheus 官方 Go 实现（语法层）。</description>
+    <description>PromQL 语法层与 Prometheus API 客户端的聚合父模块。
+        promql-core：PromQL 字符串 ⇄ AST（移植自 Prometheus 官方 Go 实现语法层，零依赖）；
+        prometheus-api：对接 Prometheus HTTP API 响应的客户端（仅依赖 promql-core 与 Gson）。</description>
+
+    <modules>
+        <module>promql-core</module>
+        <module>prometheus-api</module>
+        <module>promql-bench</module>
+    </modules>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-        <!-- 语言下限 Java 17（Q2 决定）；工具链为 21 时以 release 17 编译 -->
+        <!-- 语言下限 Java 17；工具链更高版本时以 release 17 编译 -->
         <maven.compiler.release>17</maven.compiler.release>
-        <maven.compiler.source>17</maven.compiler.source>
-        <maven.compiler.target>17</maven.compiler.target>
         <junit.jupiter.version>5.10.2</junit.jupiter.version>
+        <gson.version>2.11.0</gson.version>
     </properties>
 
-    <!-- 零运行时依赖（Q6 决定）；JUnit 5 仅测试作用域 -->
-    <dependencies>
-        <dependency>
-            <groupId>org.junit.jupiter</groupId>
-            <artifactId>junit-jupiter</artifactId>
-            <version>${junit.jupiter.version}</version>
-            <scope>test</scope>
-        </dependency>
-    </dependencies>
+    <dependencyManagement>
+        <dependencies>
+            <!-- 模块间依赖 -->
+            <dependency>
+                <groupId>com.promql</groupId>
+                <artifactId>promql-core</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.promql</groupId>
+                <artifactId>prometheus-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <!-- prometheus-api 的唯一运行时第三方依赖（Q21 决定） -->
+            <dependency>
+                <groupId>com.google.code.gson</groupId>
+                <artifactId>gson</artifactId>
+                <version>${gson.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.junit.jupiter</groupId>
+                <artifactId>junit-jupiter</artifactId>
+                <version>${junit.jupiter.version}</version>
+                <scope>test</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <build>
-        <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.2.5</version>
-                <configuration>
-                    <!-- 移植自 parse_test.go 的压力用例（万层 "-{}-1" 链）需要深递归：
-                         Go 协程栈可动态增长，JVM 线程栈固定，故调大（见 PORTING.md 分歧清单）。 -->
-                    <argLine>-Xss32m</argLine>
-                </configuration>
-            </plugin>
-        </plugins>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>3.2.5</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
     </build>
 </project>

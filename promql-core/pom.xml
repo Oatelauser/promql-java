@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.promql</groupId>
+        <artifactId>promql-java</artifactId>
+        <version>0.1.0</version>
+    </parent>
+
+    <artifactId>promql-core</artifactId>
+    <packaging>jar</packaging>
+
+    <name>promql-core</name>
+    <description>PromQL 解析/打印库：PromQL 字符串 ⇄ AST。移植自 Prometheus 官方 Go 实现（语法层），零运行时依赖。</description>
+
+    <!-- 零运行时依赖（模块级设计约束）；JUnit 5 仅测试作用域 -->
+    <dependencies>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!-- 移植自 parse_test.go 的压力用例（万层 "-{}-1" 链）需要深递归：
+                         Go 协程栈可动态增长，JVM 线程栈固定，故调大（见 PORTING.md 分歧清单）。 -->
+                    <argLine>-Xss32m</argLine>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
