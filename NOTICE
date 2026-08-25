@@ -1,0 +1,9 @@
+promql-java
+Copyright 2026 The promql-java authors
+
+This product includes software developed as a derivative work of
+Prometheus (https://prometheus.io/), Copyright The Prometheus Authors,
+licensed under the Apache License, Version 2.0.
+
+The reference implementation snapshot used for this port is vendored
+under docs/promql/ of this repository.
