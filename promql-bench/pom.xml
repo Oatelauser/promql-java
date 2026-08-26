@@ -16,6 +16,8 @@
 
     <properties>
         <jmh.version>1.37</jmh.version>
+        <!-- 基准模块不发布：release deploy 时跳过（见 RELEASE.md） -->
+        <maven.deploy.skip>true</maven.deploy.skip>
     </properties>
 
     <dependencies>

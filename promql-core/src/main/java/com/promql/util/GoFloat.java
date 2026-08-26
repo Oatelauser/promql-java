@@ -67,26 +67,103 @@ public final class GoFloat {
     }
 
     /**
-     * 最短往返十进制表示：逐档收紧有效位数（{@code BigDecimal} 四舍五入到
-     * p 位），取首个数值回 {@code v} 的形式，并统一输出 {@code d[.ddd]E±x}
-     * 指数形态（消费方的解析域；BigDecimal.toString 会在部分区间输出
-     * "0.00001" 这类无指数形态）。直接用 {@code Double.toString} 不行——
-     * 它与 Go ftoa 的位数选择在次正规等区间不同（Java "4.9E-324" vs
-     * Go "5E-324"，B11 黄金向量抓出）。语义等价于 Go 最短选择：最接近
-     * v 的 p 位十进制若落在往返区间内，即 Go 在该位数上的答案。
+     * 最短往返十进制表示：优先走 {@link Double#toString} 快速路径（JDK 19+
+     * 即 Ryū 最短表示，与 Go ftoa 同一「最短位数 + 距 v 最近 + 平局偶舍入」
+     * 规则），校验不过再退回逐档收紧（{@code BigDecimal} 四舍五入到 p 位），
+     * 取首个数值回 {@code v} 的形式，并统一输出 {@code d[.ddd]E±x} 指数形态
+     * （消费方的解析域；BigDecimal.toString 会在部分区间输出 "0.00001"
+     * 这类无指数形态）。<b>不能无条件信任 {@code Double.toString}</b>——
+     * JDK 17 运行时是旧 FloatingDecimal，偶发比最短多一位（如次正规
+     * Java "4.9E-324" vs Go "5E-324"，B11 黄金向量抓出），因此快速路径
+     * 需两重校验：候选精确回读 {@code v}，且 {@code k-1} 位收紧不可区分
+     * （不可区分 = 不是最短 → 退回循环，由 BigDecimal 逐档裁判）。
+     * 语义等价于 Go 最短选择：最接近 v 的 p 位十进制若落在往返区间内，
+     * 即 Go 在该位数上的答案。
      */
     private static String shortest(double v) {
         if (v == 0.0) {
             return (Double.doubleToRawLongBits(v) < 0) ? "-0" : "0";
         }
+        // 快速路径：一次 toString + 一次回读 + 一次 BigDecimal 最短性校验，
+        // 命中时免去 1..16 档逐档 BigDecimal 构造（打印热路径的主体开销）。
+        String java = Double.toString(v);
+        String cand = javaToExpString(java);
+        if (cand != null) {
+            int e = cand.indexOf('E');
+            String digitsPart = cand.startsWith("-") ? cand.substring(1, e) : cand.substring(0, e);
+            int k = digitsPart.length() - (digitsPart.indexOf('.') < 0 ? 0 : 1);
+            if (parsesTo(java, v) && (k == 1 || !distinguishableAt(v, k - 1))) {
+                return cand;
+            }
+        }
         for (int p = 1; p < 17; p++) {
-            BigDecimal cand = new BigDecimal(v, new MathContext(p, RoundingMode.HALF_EVEN))
+            BigDecimal c = new BigDecimal(v, new MathContext(p, RoundingMode.HALF_EVEN))
                     .stripTrailingZeros();
-            if (cand.doubleValue() == v) {
-                return toExpString(cand);
+            if (c.doubleValue() == v) {
+                return toExpString(c);
             }
         }
         return Double.toString(v);
+    }
+
+    /** {@code s} 精确解析回 {@code v}（NaN 不相等，Inf/有限值按 ==）。 */
+    private static boolean parsesTo(String s, double v) {
+        try {
+            return Double.parseDouble(s) == v;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    /** p 位收紧后是否仍能区分出 {@code v}（与逐档循环同一裁判谓词）。 */
+    private static boolean distinguishableAt(double v, int p) {
+        return new BigDecimal(v, new MathContext(p, RoundingMode.HALF_EVEN))
+                .stripTrailingZeros().doubleValue() == v;
+    }
+
+    /**
+     * {@link Double#toString} 的输出（{@code [-]d[.ddd][E±x]} 或定点形态）
+     * → 本类规范指数形态；非数字形态（NaN/Infinity 等未在入口拦截的）
+     * 返回 {@code null} 由调用方退回慢路径。尾零剥离与 {@link #toExpString}
+     * 一致（{@code "1.0E23"} → {@code "1E23"}）。
+     */
+    private static String javaToExpString(String s) {
+        int e = s.indexOf('E');
+        String mantissa = e < 0 ? s : s.substring(0, e);
+        int exp = e < 0 ? 0 : Integer.parseInt(s.substring(e + 1));
+        boolean neg = mantissa.startsWith("-");
+        if (neg) {
+            mantissa = mantissa.substring(1);
+        }
+        int dot = mantissa.indexOf('.');
+        String intPart = dot < 0 ? mantissa : mantissa.substring(0, dot);
+        String frac = dot < 0 ? "" : mantissa.substring(dot + 1);
+        String digits = intPart + frac;
+        int lead = 0;
+        while (lead < digits.length() && digits.charAt(lead) == '0') {
+            lead++;
+        }
+        if (lead == digits.length() || !allAsciiDigits(digits)) {
+            return null;
+        }
+        digits = digits.substring(lead);
+        while (digits.length() > 1 && digits.charAt(digits.length() - 1) == '0') {
+            digits = digits.substring(0, digits.length() - 1);
+        }
+        // 首位有效位相对原小数点：整数部分长度 − 前导零数 − 1（+ 指数）
+        int adjusted = intPart.length() - lead - 1 + exp;
+        String d = digits.length() == 1 ? digits : digits.charAt(0) + "." + digits.substring(1);
+        return (neg ? "-" : "") + d + "E" + adjusted;
+    }
+
+    private static boolean allAsciiDigits(String s) {
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c < '0' || c > '9') {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** BigDecimal → 规范指数形态（首位非零，负指数也用 E）。 */

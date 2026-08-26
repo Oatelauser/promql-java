@@ -13,6 +13,23 @@
     <description>PromQL 语法层与 Prometheus API 客户端的聚合父模块。
         promql-core：PromQL 字符串 ⇄ AST（移植自 Prometheus 官方 Go 实现语法层，零依赖）；
         prometheus-api：对接 Prometheus HTTP API 响应的客户端（仅依赖 promql-core 与 Gson）。</description>
+    <url>https://github.com/Oatelauser/promql-java</url>
+
+    <scm>
+        <connection>scm:git:https://github.com/Oatelauser/promql-java.git</connection>
+        <developerConnection>scm:git:git@github.com:Oatelauser/promql-java.git</developerConnection>
+        <url>https://github.com/Oatelauser/promql-java</url>
+    </scm>
+
+    <!-- 发布目标：GitHub Packages（release.yml 以 GITHUB_TOKEN 认证；
+         promql-bench 经 maven.deploy.skip 排除）。流程见 RELEASE.md。 -->
+    <distributionManagement>
+        <repository>
+            <id>github</id>
+            <name>GitHub Packages</name>
+            <url>https://maven.pkg.github.com/Oatelauser/promql-java</url>
+        </repository>
+    </distributionManagement>
 
     <modules>
         <module>promql-core</module>
@@ -65,7 +82,61 @@
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>3.2.5</version>
                 </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-source-plugin</artifactId>
+                    <version>3.3.1</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-javadoc-plugin</artifactId>
+                    <version>3.11.2</version>
+                    <configuration>
+                        <!-- javadoc 以中文为主、含项目内写法约定（Q4=C 等），不做 doclint -->
+                        <doclint>none</doclint>
+                        <detectJavaApiLink>false</detectJavaApiLink>
+                        <detectLinks>false</detectLinks>
+                        <encoding>UTF-8</encoding>
+                        <charset>UTF-8</charset>
+                        <docencoding>UTF-8</docencoding>
+                    </configuration>
+                </plugin>
             </plugins>
         </pluginManagement>
     </build>
+
+    <!-- 发布 profile：随 release.yml（tag v*）触发；本地可 mvn -P release package 预演 -->
+    <profiles>
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

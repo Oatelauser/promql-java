@@ -139,6 +139,12 @@ Java 17 的 PromQL 解析/打印库。本文记录：源文件 ↔ Java 类型�
    负数小数指数偏移一位（`-123456.789` 误入科学分支）、次正规数最短位数
    （Java "4.9E-324" vs Go "5E-324"）、无小数点形态的科学指数（`1e6`
    误作 `1e+04`）——正是 B11 存在的理由。
+   `shortest()` 含快速路径：优先采信 JDK 19+ `Double.toString`（Ryū，与
+   Go ftoa 同一「最短 + 最近 + 平局偶舍入」规则），但**两重校验**不过即
+   退回 BigDecimal 逐档循环（裁判谓词与原实现逐字相同）：候选须精确回读
+   `v`，且 `k-1` 位收紧不可区分——后者防 JDK 17 运行时旧 FloatingDecimal
+   偶发多一位（如次正规 "4.9E-324" vs Go "5E-324"）。黄金向量全量通过，
+   混合语料实测约 4×（JDK 25，`FormatBenchmark`）。
 
 8. **`ShortString()` 裁剪。**
    Go printer.go 的 `ShortString` 系列（调试用途，快照内无生产调用方）按

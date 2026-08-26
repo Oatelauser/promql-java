@@ -41,35 +41,60 @@ public abstract class AbstractPrometheusClient extends AbstractPrometheusQueryCl
      * 每个序列的标签集独立成组，边界不丢失。
      */
     public SeriesData series(Long start, Long end, List<String> matchers) {
+        return series(start, end, matchers, null);
+    }
+
+    /**
+     * {@code /api/v1/series}（带 {@link RequestOptions}；本端点缺省 GET，
+     * 大量 {@code match[]} 时可切 POST 规避 URL 长度限制）。
+     */
+    public SeriesData series(Long start, Long end, List<String> matchers, RequestOptions options) {
         List<RawRequest.Param> params = new ArrayList<>();
         addRange(params, start, end);
         List<String> ms = requireMatchers(matchers);
         for (int i = 0; i < ms.size(); i++) {
             params.add(new RawRequest.Param("match[]", requireSelector(ms.get(i), i)));
         }
-        return bind(RawRequest.get("/api/v1/series", params), ResponseBinder::bindSeries);
+        return bind(toRequest("/api/v1/series", params, false, options), ResponseBinder::bindSeries);
     }
 
     /**
      * {@code /api/v1/labels}：标签名列表（可选 {@code match[]} 过滤）。
      */
     public LabelNamesData labelNames(Long start, Long end, List<String> matchers) {
+        return labelNames(start, end, matchers, null);
+    }
+
+    /**
+     * {@code /api/v1/labels}（带 {@link RequestOptions}；本端点缺省 GET）。
+     */
+    public LabelNamesData labelNames(Long start, Long end, List<String> matchers,
+            RequestOptions options) {
         List<RawRequest.Param> params = new ArrayList<>();
         addRange(params, start, end);
         addMatchers(params, matchers);
-        return bind(RawRequest.get("/api/v1/labels", params), ResponseBinder::bindLabelNames);
+        return bind(toRequest("/api/v1/labels", params, false, options), ResponseBinder::bindLabelNames);
     }
 
     /**
      * {@code /api/v1/label/<label>/values}：指定标签的取值列表。
      */
     public LabelValuesData labelValues(String label, Long start, Long end, List<String> matchers) {
+        return labelValues(label, start, end, matchers, null);
+    }
+
+    /**
+     * {@code /api/v1/label/<label>/values}（带 {@link RequestOptions}；本端点
+     * 缺省 GET）。
+     */
+    public LabelValuesData labelValues(String label, Long start, Long end, List<String> matchers,
+            RequestOptions options) {
         Objects.requireNonNull(label, "label");
         List<RawRequest.Param> params = new ArrayList<>();
         addRange(params, start, end);
         addMatchers(params, matchers);
         String path = "/api/v1/label/" + HttpUtils.encodeSegment(label) + "/values";
-        return bind(RawRequest.get(path, params), ResponseBinder::bindLabelValues);
+        return bind(toRequest(path, params, false, options), ResponseBinder::bindLabelValues);
     }
 
     /**
@@ -78,19 +103,36 @@ public abstract class AbstractPrometheusClient extends AbstractPrometheusQueryCl
      * 就地经解析器校验，非法不发请求。
      */
     public ExemplarsData queryExemplars(String query, Long start, Long end) {
+        return queryExemplars(query, start, end, null);
+    }
+
+    /**
+     * {@code /api/v1/query_exemplars}（带 {@link RequestOptions}；本端点缺省
+     * POST，可切 GET）。
+     */
+    public ExemplarsData queryExemplars(String query, Long start, Long end, RequestOptions options) {
         Objects.requireNonNull(query, "query");
         requireSelector(query, 0);
         List<RawRequest.Param> params = new ArrayList<>();
         params.add(new RawRequest.Param("query", query));
         addRange(params, start, end);
-        return bind(RawRequest.post("/api/v1/query_exemplars", params), ResponseBinder::bindExemplars);
+        return bind(toRequest("/api/v1/query_exemplars", params, true, options),
+                ResponseBinder::bindExemplars);
     }
 
     /**
      * {@code /api/v1/query_exemplars}（类型化重载）：匹配器列表渲染为选择器串。
      */
     public ExemplarsData queryExemplars(List<LabelMatcher> matchers, Long start, Long end) {
-        return queryExemplars(selectorOf(matchers), start, end);
+        return queryExemplars(matchers, start, end, null);
+    }
+
+    /**
+     * {@code /api/v1/query_exemplars}（类型化重载 + {@link RequestOptions}）。
+     */
+    public ExemplarsData queryExemplars(List<LabelMatcher> matchers, Long start, Long end,
+            RequestOptions options) {
+        return queryExemplars(selectorOf(matchers), start, end, options);
     }
 
     // ════════ 内部（查询族端点专用）════════

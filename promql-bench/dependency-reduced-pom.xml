@@ -68,5 +68,6 @@
   </dependencies>
   <properties>
     <jmh.version>1.37</jmh.version>
+    <maven.deploy.skip>true</maven.deploy.skip>
   </properties>
 </project>

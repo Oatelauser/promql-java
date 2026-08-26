@@ -73,6 +73,14 @@ public abstract class AbstractPrometheusQueryClient {
      * @param timeout 查询超时；{@code null} 用服务器默认
      */
     public QueryData query(Expr expr, Long time, Duration timeout) {
+        return query(expr, time, timeout, (RequestOptions) null);
+    }
+
+    /**
+     * 即时查询（带 {@link RequestOptions}：覆盖 HTTP 方法、透传额外参数）。
+     * 本端点缺省 POST。
+     */
+    public QueryData query(Expr expr, Long time, Duration timeout, RequestOptions options) {
         ValueType expected = bindableType(expr);
         List<RawRequest.Param> params = new ArrayList<>();
         params.add(new RawRequest.Param("query", expr.toPromql()));
@@ -80,7 +88,7 @@ public abstract class AbstractPrometheusQueryClient {
         if (timeout != null) {
             params.add(new RawRequest.Param("timeout", Durations.format(timeout)));
         }
-        return bind(RawRequest.post("/api/v1/query", params),
+        return bind(toRequest("/api/v1/query", params, true, options),
                 (body, status) -> ResponseBinder.bindQuery(body, status, expected));
     }
 
@@ -90,6 +98,14 @@ public abstract class AbstractPrometheusQueryClient {
      * {@link IllegalArgumentException}（客户端就地失败，不发请求）。
      */
     public <T extends QueryData> T query(Expr expr, Long time, Duration timeout, Class<T> type) {
+        return query(expr, time, timeout, type, null);
+    }
+
+    /**
+     * 即时查询（显式类型 + {@link RequestOptions}；类型校验先于选项处理）。
+     */
+    public <T extends QueryData> T query(Expr expr, Long time, Duration timeout,
+            Class<T> type, RequestOptions options) {
         Objects.requireNonNull(type, "type");
         ValueType expected = bindableType(expr);
         if (!variantOf(expected).equals(type)) {
@@ -97,7 +113,7 @@ public abstract class AbstractPrometheusQueryClient {
                     + "（对应 " + variantOf(expected).getSimpleName() + "），与请求的 "
                     + type.getSimpleName() + " 不符: " + expr.toPromql());
         }
-        return type.cast(query(expr, time, timeout));
+        return type.cast(query(expr, time, timeout, options));
     }
 
     /**
@@ -109,6 +125,14 @@ public abstract class AbstractPrometheusQueryClient {
      * @param timeout 查询超时；{@code null} 用服务器默认
      */
     public MatrixData queryRange(Expr expr, long start, long end, Duration step, Duration timeout) {
+        return queryRange(expr, start, end, step, timeout, null);
+    }
+
+    /**
+     * 区间查询（带 {@link RequestOptions}；本端点缺省 POST）。
+     */
+    public MatrixData queryRange(Expr expr, long start, long end, Duration step, Duration timeout,
+            RequestOptions options) {
         Objects.requireNonNull(expr, "expr");
         Objects.requireNonNull(step, "step");
         bindableType(expr);
@@ -120,7 +144,7 @@ public abstract class AbstractPrometheusQueryClient {
         if (timeout != null) {
             params.add(new RawRequest.Param("timeout", Durations.format(timeout)));
         }
-        return bind(RawRequest.post("/api/v1/query_range", params),
+        return bind(toRequest("/api/v1/query_range", params, true, options),
                 (body, status) -> ResponseBinder.bindQuery(body, status, ValueType.MATRIX),
                 MatrixData.class);
     }
@@ -178,6 +202,23 @@ public abstract class AbstractPrometheusQueryClient {
             case STRING -> StringData.class;
             default -> throw new IllegalArgumentException("无法映射的结果类型: " + t);
         };
+    }
+
+    /**
+     * 标准参数 + 请求选项 → 最终请求：{@code options == null} 时用端点缺省方法
+     * （查询族端点均为 POST）；{@link RequestOptions#extraParams()} 追加在标准
+     * 参数之后（同名键形成重复键，与 {@code match[]} 多值语义一致）。供两层
+     * 端点共用。
+     */
+    protected static RawRequest toRequest(String path, List<RawRequest.Param> params,
+            boolean defaultPost, RequestOptions options) {
+        boolean post = options == null ? defaultPost : options.usePost();
+        List<RawRequest.Param> all = params;
+        if (options != null && !options.extraParams().isEmpty()) {
+            all = new ArrayList<>(params);
+            all.addAll(options.extraParams());
+        }
+        return post ? RawRequest.post(path, all) : RawRequest.get(path, all);
     }
 
     /**

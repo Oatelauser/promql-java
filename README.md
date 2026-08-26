@@ -1,5 +1,7 @@
 # promql-java
 
+[![CI](https://github.com/Oatelauser/promql-java/actions/workflows/ci.yml/badge.svg)](https://github.com/Oatelauser/promql-java/actions/workflows/ci.yml)
+
 PromQL 全栈 Java 工具链（Java 17），多模块 Maven 项目：
 
 - **promql-core** — PromQL 字符串 ⇄ AST 语法库，**零运行时依赖**。移植自
@@ -36,6 +38,12 @@ for (List<Label> labels : s.series()) {
 }
 LabelValuesData jobs = client.labelValues("job", null, null, null);
 ExemplarsData exs = client.queryExemplars("http_requests_total", null, null);
+
+// 按请求切换 GET/POST（查询族端点两法等价，POST 规避 URL 长度限制）
+// + 未知参数透传（服务器新参数无需等库升级；null 选项 = 端点缺省方法）
+SeriesData big = client.series(null, null, manyMatchers, RequestOptions.post());
+VectorData v3 = client.query(Promql.parse("up"), null, null,
+        RequestOptions.get(List.of(new RawRequest.Param("x-flag", "1"))));
 ```
 
 ## 特性
@@ -55,6 +63,10 @@ ExemplarsData exs = client.queryExemplars("http_requests_total", null, null);
   4935 条差分模糊语料（突变+文法随机游走+病态探针，ok 行打印逐字相等、
   fail 行首错位置/消息逐字相等），再生成见 `scripts/fuzz-oracle`。
 - **零运行时依赖**。
+- **最短浮点格式化快速路径**：GoFloat 优先采信 JDK 19+ 的 Ryū 最短表示
+  （`Double.toString`），两重校验（精确回读 + 最短性）不过即退回 BigDecimal
+  逐档裁判——JDK 17 运行时同样正确；10049 条 Go 黄金向量全量背书，混合
+  语料实测约 4×（见 `FormatBenchmark`）。
 
 ### prometheus-api
 
@@ -74,18 +86,23 @@ ExemplarsData exs = client.queryExemplars("http_requests_total", null, null);
   `InterruptedIOException`。
 - **传输加固**：无 `timeout` 参数时默认 HTTP 超时 2m+5s（镜像服务器默认查询
   超时，可配可关）+ 默认 10s 连接超时；`requestDecorator` 注入鉴权 header。
+- **GET/POST 按请求切换 + 参数透传**：查询族全部端点（query/query_range/
+  series/labels/label values/query_exemplars）支持 `RequestOptions` 显式选
+  GET 或 POST（两法协议等价，POST 规避长表达式/多 `match[]` 的 URL 长度
+  限制），并可透传任意额外参数（同名键形成多值，未知键原样发送）；
+  `null` 选项 = 端点既有缺省方法，行为不变。
 
 ## 快速上手
 
 要求：JDK 17+（工具链 21+ 时按 release 17 编译）。
 
 ```bash
-mvn test            # 583 用例：promql-core 527 + prometheus-api 56
+mvn test            # 593 用例：promql-core 527 + prometheus-api 66
 mvn test -pl promql-core            # 仅语法库（352 官方表 + 22 AST 抽样
                                     #  + 45 字符串→AST + 92 打印黄金 + 14 AST→字符串
                                     #  + 1 GoFloat 黄金向量〔10049 条 Go oracle〕
                                     #  + 1 差分模糊〔4935 条 Go oracle 全量重放〕）
-mvn test -pl prometheus-api -am     # 客户端（27 binder golden + 23 基类矩阵
+mvn test -pl prometheus-api -am     # 客户端（27 binder golden + 33 基类矩阵
                                     #  + 6 真传输 HttpServer 集成）
 mvn -pl promql-bench -am package && java -jar promql-bench/target/bench.jar
                                     # JMH 基准（手动；例：'ParsePrintBenchmark.parse -p query=up'）
@@ -112,6 +129,16 @@ Maven 坐标（安装到本地库 `mvn install` 后可用）：
 主要入口：`com.promql.Promql`（解析门面）与
 `com.promql.api.JdkHttpPrometheusClient` / `AbstractPrometheusClient`（客户端）。
 实验开关见 `ParserOptions`（默认全关）。
+
+## CI 与发布
+
+- **CI**（push main / PR）：JDK **17 + 21** 双矩阵全量测试。JDK 17 不只是
+  最低支持运行时——其 `Double.toString` 仍是旧 FloatingDecimal，GoFloat
+  快速路径的最短性守卫在该运行时常态走退回分支，慢路径随之持续回归。
+- **发布**：推送 `v*` 标签触发 [release 工作流](.github/workflows/release.yml)
+  ——全量测试后把 `promql-core` / `prometheus-api`（jar + sources + javadoc）
+  发到 GitHub Packages 并建 Release 页，测试不过不发布。步骤、本地预演与
+  消费方接入见 [RELEASE.md](RELEASE.md)。
 
 ## 与 Go 实现的关系
 
@@ -152,6 +179,7 @@ prometheus-api/                 # Prometheus HTTP API 客户端（依赖 promql-
 │   │                           # AbstractPrometheusClient（子层：+查询族端点）、
 │   │                           # JdkHttpPrometheusClient（JDK HttpClient 默认实现）、
 │   │                           # RawRequest/RawResponse（传输无关）、
+│   │                           # RequestOptions（GET/POST 切换+参数透传）、
 │   │                           # Durations/ApiHttp（内部工具）
 │   └── api/response/           # sealed QueryData 四变体（含 warnings/infos）
 │                               # + SampleValue（Float/Histogram）+ Histogram/Bucket
@@ -159,15 +187,17 @@ prometheus-api/                 # Prometheus HTTP API 客户端（依赖 promql-
 │                               #   LabelValuesData/ExemplarsData）
 │                               # + ErrorType/PrometheusException
 │                               # + ResponseBinder（Gson 树 → record 绑定）
-└── src/test/                   # ResponseBinderTest（26 golden）、
-                                # AbstractPrometheusClientTest（19 基类矩阵）、
-                                # JdkHttpPrometheusClientTest（4 真传输集成）
+└── src/test/                   # ResponseBinderTest（27 golden）、
+                                # AbstractPrometheusClientTest（33 基类矩阵，含
+                                #   RequestOptions 方法切换/参数透传 10 例）、
+                                # JdkHttpPrometheusClientTest（6 真传输集成）
 
 extract_cases.py                # parse_test.go → parse_test_cases.tsv 提取器
 scripts/                        # check-snapshot.sh（快照 vs 上游 tag 漂移检测）、
                                 # gen_gofloat_vectors.go（GoFloat 黄金向量 Go oracle）、
                                 # fuzz-oracle/（差分模糊语料生成器 + probe/tree 排查工具）
-promql-bench/                   # JMH 基准（ParsePrintBenchmark / BindBenchmark）
+promql-bench/                   # JMH 基准（ParsePrintBenchmark / BindBenchmark /
+                                #   FormatBenchmark〔GoFloat 格式化/解析〕）
 docs/                           # promql 参考快照 + adr/
 ```
 

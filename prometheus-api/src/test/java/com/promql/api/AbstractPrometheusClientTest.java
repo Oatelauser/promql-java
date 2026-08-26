@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -279,6 +280,127 @@ class AbstractPrometheusClientTest {
         String expected = "{" + ms.stream().map(LabelMatcher::toPromql).collect(Collectors.joining(",")) + "}";
         assertEquals(List.of(expected), values(c.lastRequest, "query"));
         assertEquals(0, d.groups().size());
+    }
+
+    // ════════ RequestOptions：方法切换 + 参数透传 ════════
+
+    @Test
+    void optionsSwitchQueryToGet() {
+        FakeClient c = new FakeClient();
+        c.body = VECTOR_JSON;
+        VectorData d = assertInstanceOf(VectorData.class,
+                c.query(Promql.parse("up"), 1435341451781L, Duration.ofSeconds(30), RequestOptions.get()));
+        assertEquals("GET", c.lastRequest.method()); // 缺省 POST，显式覆盖为 GET
+        assertEquals(List.of("up"), values(c.lastRequest, "query"));
+        assertEquals(List.of("1435341451.781"), values(c.lastRequest, "time"));
+        assertEquals(1, d.samples().size());
+    }
+
+    @Test
+    void optionsNullKeepsEndpointDefaults() {
+        FakeClient c = new FakeClient();
+        c.body = VECTOR_JSON;
+        c.query(Promql.parse("up"), null, null, (RequestOptions) null);
+        assertEquals("POST", c.lastRequest.method());
+
+        c.body = "{\"status\":\"success\",\"data\":[{\"__name__\":\"up\"}]}";
+        c.series(null, null, List.of("up"), null);
+        assertEquals("GET", c.lastRequest.method());
+    }
+
+    @Test
+    void optionsSwitchSeriesToPost() {
+        FakeClient c = new FakeClient();
+        c.body = "{\"status\":\"success\",\"data\":[]}";
+        c.series(0L, 60000L, List.of("up", "down"), RequestOptions.post());
+        assertEquals("POST", c.lastRequest.method()); // 缺省 GET
+        assertEquals(List.of("up", "down"), values(c.lastRequest, "match[]"));
+    }
+
+    @Test
+    void optionsSwitchQueryRangeAndExemplarsToGet() {
+        FakeClient c = new FakeClient();
+        c.body = MATRIX_JSON;
+        c.queryRange(Promql.parse("up"), 0, 60, Duration.ofSeconds(15), null, RequestOptions.get());
+        assertEquals("GET", c.lastRequest.method());
+
+        c.body = "{\"status\":\"success\",\"data\":[]}";
+        c.queryExemplars("up", 0L, 60_000L, RequestOptions.get());
+        assertEquals("GET", c.lastRequest.method());
+    }
+
+    @Test
+    void optionsSwitchLabelEndpointsToPost() {
+        FakeClient c = new FakeClient();
+        c.body = "{\"status\":\"success\",\"data\":[\"job\"]}";
+        c.labelNames(null, null, List.of("up"), RequestOptions.post());
+        assertEquals("POST", c.lastRequest.method());
+        assertEquals("/api/v1/labels", c.lastRequest.path());
+
+        c.body = "{\"status\":\"success\",\"data\":[\"api\"]}";
+        c.labelValues("job", null, null, null, RequestOptions.post());
+        assertEquals("POST", c.lastRequest.method());
+        assertEquals("/api/v1/label/job/values", c.lastRequest.path());
+    }
+
+    @Test
+    void optionsExtraParamsAppendedAfterStandardOnes() {
+        FakeClient c = new FakeClient();
+        c.body = VECTOR_JSON;
+        c.query(Promql.parse("up"), 1000L, null,
+                RequestOptions.post(List.of(new RawRequest.Param("x-custom", "1"))));
+        List<RawRequest.Param> ps = c.lastRequest.params();
+        // 标准参数在前、透传在后；无 options 时 params 列表即标准列表（零拷贝）
+        assertEquals("query", ps.get(0).name());
+        assertEquals("time", ps.get(1).name());
+        assertEquals("x-custom", ps.get(ps.size() - 1).name());
+        assertEquals(List.of("1"), values(c.lastRequest, "x-custom"));
+    }
+
+    @Test
+    void optionsExtraParamsAllowDuplicateKeys() {
+        FakeClient c = new FakeClient();
+        c.body = "{\"status\":\"success\",\"data\":[]}";
+        c.series(null, null, List.of("up"),
+                RequestOptions.get(List.of(new RawRequest.Param("match[]", "down"))));
+        // 重复 match[] 键不合并（多值语义），透传值在标准值之后
+        assertEquals(List.of("up", "down"), values(c.lastRequest, "match[]"));
+    }
+
+    @Test
+    void typedQueryWithOptionsKeepsFailFastAndHonorsMethod() {
+        FakeClient c = new FakeClient();
+        c.body = SCALAR_JSON;
+        ScalarData d = c.query(Promql.parse("1"), null, null, ScalarData.class, RequestOptions.get());
+        assertEquals("GET", c.lastRequest.method());
+        assertEquals(1.0, assertInstanceOf(FloatValue.class, d.value()).value());
+
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> c.query(Promql.parse("1"), null, null, VectorData.class, RequestOptions.get()));
+        assertTrue(e.getMessage().contains("VectorData"));
+    }
+
+    @Test
+    void typedExemplarsOverloadPassesOptionsThrough() {
+        FakeClient c = new FakeClient();
+        c.body = "{\"status\":\"success\",\"data\":[]}";
+        List<LabelMatcher> ms = Promql.parseMetricSelector("up{job=\"api\"}");
+        c.queryExemplars(ms, 0L, null, RequestOptions.get());
+        assertEquals("GET", c.lastRequest.method());
+        assertEquals(1, values(c.lastRequest, "query").size());
+    }
+
+    @Test
+    void requestOptionsRecordSemantics() {
+        assertEquals(List.of(), RequestOptions.get(null).extraParams()); // null 归一为空
+        assertEquals(RequestOptions.DEFAULT, RequestOptions.get());
+        assertThrows(NullPointerException.class, () -> RequestOptions.withParam(null, "v"));
+        RequestOptions base = RequestOptions.withParam("a", "1");
+        RequestOptions merged = base.withExtra("b", "2");
+        assertEquals(List.of(new RawRequest.Param("a", "1")), base.extraParams()); // 原对象不变
+        assertEquals(List.of(new RawRequest.Param("a", "1"), new RawRequest.Param("b", "2")),
+                merged.extraParams());
+        assertFalse(merged.usePost() != base.usePost()); // 方法位随拷贝保留
     }
 
     // ════════ 异常包装（Q5=A）════════

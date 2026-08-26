@@ -1,0 +1,28 @@
+name: CI
+
+# 全量测试矩阵：JDK 17（最低支持运行时）+ 21（LTS）。
+# JDK 17 另有实证价值：Double.toString 仍是旧 FloatingDecimal（非最短），
+# GoFloat 快速路径的最短性守卫在该运行时走退回分支——即慢路径在 CI 常态
+# 回归（见 PORTING.md 分歧 7）。promql-bench 随 verify 构建（shade），无测试。
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: JDK ${{ matrix.java }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ['17', '21']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+      - name: Build & test
+        run: mvn -B -ntp verify
