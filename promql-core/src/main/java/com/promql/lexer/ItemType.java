@@ -305,8 +305,15 @@ public enum ItemType {
         m.put(NEQ_REGEX, "!~");
         m.put(POW, "^");
         m.put(AT, "@");
-        // Go init()：关键字表整体并入。
+        // Go init()：关键字表整体并入——但 init() 是先把关键字并入 ItemTypeStr、
+        // 之后才追加 key["inf"/"nan"] = NUMBER，故符号表【不含】NUMBER。
+        // 若照单全收，NUMBER.toString() 会变成 "nan"，Item.desc() 随之丢失
+        // "number" 前缀（unexpected number "1" 误作 unexpected "1"）。
+        // 差分模糊语料首次接入即抓出（fuzz_diff_cases.tsv 行 172 起 337 条分歧的根因之一）。
         for (Map.Entry<String, ItemType> e : KEY.entrySet()) {
+            if (e.getValue() == NUMBER) {
+                continue;
+            }
             m.putIfAbsent(e.getValue(), e.getKey());
         }
         return m;

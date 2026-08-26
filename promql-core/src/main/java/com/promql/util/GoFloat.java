@@ -218,10 +218,19 @@ public final class GoFloat {
             return Double.NaN;
         }
         String lower = t.toLowerCase(Locale.ROOT);
-        if (lower.startsWith("0x") || lower.startsWith("-0x") || lower.startsWith("+0x")) {
-            return parseHexFloat(t);
+        try {
+            if (lower.startsWith("0x") || lower.startsWith("-0x") || lower.startsWith("+0x")) {
+                return parseHexFloat(t);
+            }
+            return Double.parseDouble(t);
+        } catch (NumberFormatException e) {
+            // Go 抛 *strconv.NumError：strconv.ParseFloat: parsing "<s>": invalid syntax。
+            // 消息引原始输入 s（保留下划线，与 Go 一致）；数值范围错误保留 range 后缀。
+            String m = e.getMessage();
+            String suffix = m != null && m.contains("value out of range") ? "value out of range" : "invalid syntax";
+            throw new NumberFormatException(
+                    "strconv.ParseFloat: parsing " + GoStrings.quote(s) + ": " + suffix);
         }
-        return Double.parseDouble(t);
     }
 
     /**

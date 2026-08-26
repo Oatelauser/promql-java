@@ -103,6 +103,27 @@ public final class Parser {
     private final List<ParseError> parseErrors = new ArrayList<>();
     /** 最近一个收尾定界符（右括号/右花括号/右方括号/时长/数字）之后的下标。 */
     private int lastClosing;
+    /**
+     * lastClosing 上一次被 closer 更新前的值。用于 offset 等尾随修饰符：
+     * 值解析尾部的 advance 可能多拉一个 closer（如聚合右括号）把
+     * lastClosing 再推一步，Go 归约时读到的是<b>尾 token 自身</b>的末尾
+     * ——尾 token 恒为 closer，故污染至多一步，回退用本字段（见
+     * {@link #modifierEnd()}）。
+     */
+    private int prevClosing;
+    /**
+     * 词法器已死亡（拉到过 ERROR 词法单元）。Go 语义：Lex 遇 ERROR 记录后
+     * 返回 0（EOF）且解析继续，但 {@code parser.Error} 为空操作、
+     * {@code unexpected} 对 ERROR 项静默——故后续语法错误一律不再报告。
+     */
+    private boolean lexerDead;
+    /**
+     * 正处于聚合体（{@code aggregate_op error} 产生式作用域）内，栈式
+     * 保存/恢复（嵌套聚合）。体内任何深度的通用语法错误上下文为
+     * “aggregation”；offset/@/grouping/label matching 等更深的专属
+     * 错误产生式不受影响（各自显式传上下文）。
+     */
+    private boolean inAggregation;
     /** {@code info()} 第二参数的向量选择器：跳过“非空匹配器”检查（Go 用节点上的 BypassEmptyMatcherCheck 标志）。 */
     private final Set<VectorSelector> infoBypass = Collections.newSetFromMap(new IdentityHashMap<>());
 
@@ -215,6 +236,13 @@ public final class Parser {
      * 取下一个词法单元（跳过注释），对应 Go {@code parser.Lex}：
      * ERROR 词法单元以词法器起点..输入末尾为区间直接报告；右括号/右花括号/
      * 右方括号/时长/数字更新 lastClosing。
+     *
+     * <p>Go 在 Lex 遇 ERROR 时记录错误并<b>返回 0（EOF 词法单元）给
+     * yacc、解析继续</b>（goyacc 的语法错误经 {@code parser.Error} 空操作
+     * 吞掉）。本版对应实现：立即记录（保持 Go 的追加顺序），随后以伪造的
+     * EOF 单元代替 ERROR 单元（解析代码不再见到 ERROR 类型），并置
+     * {@link #lexerDead}——此后 {@link #unexpected} 静默中止，等价于 Go
+     * “不重复报告词法错误”的兜底。
      */
     private void advance() {
         while (true) {
@@ -225,11 +253,14 @@ public final class Parser {
         }
         if (item.typ() == ItemType.ERROR) {
             addParseErrf(new PositionRange(lex.start(), input.length()), item.val());
-            throw Abort.INSTANCE;
+            lexerDead = true;
+            item = new Item(ItemType.EOF, input.length(), "");
         }
         switch (item.typ()) {
-            case RIGHT_BRACE, RIGHT_PAREN, RIGHT_BRACKET, DURATION, NUMBER ->
-                    lastClosing = item.pos() + item.val().length();
+            case RIGHT_BRACE, RIGHT_PAREN, RIGHT_BRACKET, DURATION, NUMBER -> {
+                prevClosing = lastClosing;
+                lastClosing = item.pos() + item.val().length();
+            }
             default -> {
             }
         }
@@ -259,10 +290,11 @@ public final class Parser {
     /**
      * Go {@code parser.unexpected}：消息为
      * {@code unexpected <desc>[ in <context>][, expected <expected>]}；
-     * 词法 ERROR 不重复报告。
+     * 词法 ERROR 不重复报告（词法器死亡后语法错误全部静默——Go 侧由
+     * “unexpected 跳过 ERROR 项 + parser.Error 空操作”共同实现）。
      */
     private void unexpected(String context, String expected) {
-        if (item.typ() == ItemType.ERROR) {
+        if (item.typ() == ItemType.ERROR || lexerDead) {
             throw Abort.INSTANCE;
         }
         StringBuilder sb = new StringBuilder("unexpected ").append(item.desc());
@@ -322,14 +354,21 @@ public final class Parser {
             m.on = item.typ() == ItemType.ON;
             advance();
             m.matchingLabels = parseGroupingLabels();
+            advance(); // 消费 )（停右括号约定）
             if (item.typ() == ItemType.GROUP_LEFT) {
                 advance();
                 m.card = VectorMatchCardinality.MANY_TO_ONE;
                 m.include = parseMaybeGroupingLabels();
+                if (m.include != null) {
+                    advance(); // 消费 )
+                }
             } else if (item.typ() == ItemType.GROUP_RIGHT) {
                 advance();
                 m.card = VectorMatchCardinality.ONE_TO_MANY;
                 m.include = parseMaybeGroupingLabels();
+                if (m.include != null) {
+                    advance(); // 消费 )
+                }
             }
         }
         if (item.typ() == ItemType.FILL) {
@@ -358,7 +397,7 @@ public final class Parser {
     /** fill_value 规则：{@code ( 数字/时长 )} 或 {@code ( 一元 数字/时长 )}，返回数值。 */
     private double parseFillValue() {
         if (item.typ() != ItemType.LEFT_PAREN) {
-            unexpected("", "");
+            unexpected(aggCtx(), "");
         }
         advance();
         boolean neg = false;
@@ -367,15 +406,16 @@ public final class Parser {
             advance();
         }
         if (item.typ() != ItemType.NUMBER && item.typ() != ItemType.DURATION) {
-            unexpected("", "");
+            unexpected(aggCtx(), "");
         }
+        // 数值解析（含错误）在拉取前瞻前（Go 归约动作时机）。
         Item num = item;
+        double v = numberOrDurationSeconds(num);
         advance();
         if (item.typ() != ItemType.RIGHT_PAREN) {
-            unexpected("", "");
+            unexpected(aggCtx(), "");
         }
         advance();
-        double v = numberOrDurationSeconds(num);
         return neg ? -v : v;
     }
 
@@ -481,7 +521,7 @@ public final class Parser {
                     advance();
                     return vectorSelectorNamed(n);
                 }
-                unexpected("", "");
+                unexpected(aggCtx(), "");
                 return null;
             }
         }
@@ -498,7 +538,7 @@ public final class Parser {
                     advance();
                     Expr d = parseOffsetDuration();
                     if (d instanceof NumberLiteral nl) {
-                        e = applyOffset(e, Math.round(nl.val() * 1e9), null);
+                        e = applyOffset(e, goRoundToLong(nl.val() * 1e9), null);
                     } else {
                         e = applyOffset(e, 0L, (DurationExpr) d);
                     }
@@ -536,21 +576,29 @@ public final class Parser {
         if (item.typ() == ItemType.BY || item.typ() == ItemType.WITHOUT) {
             without = item.typ() == ItemType.WITHOUT;
             advance();
-            grouping = parseGroupingLabels();
+            grouping = parseGroupingLabels(); // 返回时 ) 为当前单元
+            advance(); // 消费 )
             modifierFirst = true;
         }
         if (item.typ() != ItemType.LEFT_PAREN) {
             unexpected("aggregation", "");
         }
-        List<Expr> args = parseFunctionCallArgs();
+        boolean prevInAgg = inAggregation;
+        inAggregation = true; // aggregate_op error 产生式作用域：聚合体内
+        List<Expr> args = parseFunctionCallArgs(); // 返回时 ) 为当前单元
+        inAggregation = prevInAgg;
         // 无任何修饰符（aggregate_op function_call_body）时 overread=true：
+        // 区分是否尾随修饰符需前瞻一个词法单元（Go 同样多读一个 token），
         // 区间末尾需回溯到右括号（Go findPrevRightParen）。
         boolean overread = !modifierFirst;
+        advance(); // 前瞻：区分尾随 by/without
         if (!modifierFirst && (item.typ() == ItemType.BY || item.typ() == ItemType.WITHOUT)) {
             without = item.typ() == ItemType.WITHOUT;
             advance();
-            grouping = parseGroupingLabels();
-            overread = false;
+            grouping = parseGroupingLabels(); // 返回时 ) 为当前单元
+            AggregateExpr agg = newAggregateExpr(op, grouping, without, args, false);
+            advance(); // 消费 )
+            return agg;
         }
         return newAggregateExpr(op, grouping, without, args, overread);
     }
@@ -592,7 +640,7 @@ public final class Parser {
 
     /** IDENTIFIER/STEP/RANGE/START/END/MAX_OF/MIN_OF 后跟 {@code (} 时的函数调用。 */
     private Call parseFunctionCall(Item ident) {
-        List<Expr> args = parseFunctionCallArgs();
+        List<Expr> args = parseFunctionCallArgs(); // 返回时 ) 为当前单元
         Function fn = Functions.getFunction(ident.val());
         if (fn == null) {
             fail(range(ident), String.format("unknown function with name %s", GoStrings.quote(ident.val())));
@@ -600,15 +648,26 @@ public final class Parser {
         if (fn.experimental() && !options.enableExperimentalFunctions()) {
             fail(range(ident), String.format("function %s is not enabled", GoStrings.quote(ident.val())));
         }
-        return Call.of(fn, args, new PositionRange(ident.pos(), lastClosing));
+        // Go 归约动作在移进 ) 后、拉取前瞻前执行：未知函数等检查与节点
+        // End（lastClosing 此刻仍为 ) 末尾）都先于其后的词法单元。
+        Call call = Call.of(fn, args, new PositionRange(ident.pos(), lastClosing));
+        advance(); // 消费 )（此后才拉前瞻）
+        return call;
     }
 
-    /** function_call_body / function_call_args 规则（聚合与函数共用）。 */
+    /**
+     * function_call_body / function_call_args 规则（聚合与函数共用）。
+     *
+     * <p><b>停右括号约定</b>：返回时 {@code )} 为当前词法单元（不消费）。
+     * Go 的 yacc 归约动作发生在移进 {@code )} 之后、拉取前瞻之前——语义
+     * 检查与节点构造若放在消费 {@code )} 之后，lastClosing 会被前瞻 token
+     * 污染（End 多算），错误记录顺序也会倒置（前瞻词法错误先于归约语义
+     * 错误）。调用方完成检查/构造后自行 advance 消费 {@code )}。
+     */
     private List<Expr> parseFunctionCallArgs() {
         advance(); // 消费 LEFT_PAREN（调用点已保证）
         List<Expr> args = new ArrayList<>();
         if (item.typ() == ItemType.RIGHT_PAREN) {
-            advance();
             return args;
         }
         boolean afterComma = false;
@@ -618,7 +677,7 @@ public final class Parser {
                     // Go 规则 function_call_args COMMA：逗号后又非表达式
                     fail(range(item), "trailing commas not allowed in function call args");
                 }
-                unexpected("", "");
+                unexpected(aggCtx(), "");
             }
             args.add(parseBinary(PREC_LOR));
             afterComma = false;
@@ -629,13 +688,18 @@ public final class Parser {
                 if (item.typ() == ItemType.RIGHT_PAREN) {
                     fail(range(comma), "trailing commas not allowed in function call args");
                 }
+                if (!canStartExpr(item.typ())) {
+                    // Go：args COMMA 在前瞻无法移进表达式时归约（错误
+                    // 先于语法错误冒泡——probe：foo(1,=2) 首错为 trailing
+                    // commas 而非 unexpected "="）。
+                    fail(range(comma), "trailing commas not allowed in function call args");
+                }
                 continue;
             }
             if (item.typ() == ItemType.RIGHT_PAREN) {
-                advance();
                 return args;
             }
-            unexpected("", "");
+            unexpected(aggCtx(), "");
         }
     }
 
@@ -650,6 +714,7 @@ public final class Parser {
         return null;
     }
 
+    /** 停右括号约定：返回时 {@code )} 为当前单元，由调用方消费（见 {@link #parseFunctionCallArgs}）。 */
     private List<String> parseGroupingLabels() {
         if (item.typ() != ItemType.LEFT_PAREN) {
             unexpected("grouping opts", "\"(\"");
@@ -657,7 +722,6 @@ public final class Parser {
         advance();
         List<String> labels = new ArrayList<>();
         if (item.typ() == ItemType.RIGHT_PAREN) {
-            advance();
             return labels;
         }
         while (true) {
@@ -682,13 +746,11 @@ public final class Parser {
             if (item.typ() == ItemType.COMMA) {
                 advance();
                 if (item.typ() == ItemType.RIGHT_PAREN) {
-                    advance();
                     return labels;
                 }
                 continue;
             }
             if (item.typ() == ItemType.RIGHT_PAREN) {
-                advance();
                 return labels;
             }
             unexpected("grouping opts", "\",\" or \")\"");
@@ -710,7 +772,7 @@ public final class Parser {
             return VectorSelector.of("", 0L, null, null, StartOrEnd.NONE,
                     ml.matchers(), false, false, ml.range());
         }
-        unexpected("", "");
+        unexpected(aggCtx(), "");
         return null;
     }
 
@@ -862,19 +924,23 @@ public final class Parser {
                 unexpected("subquery selector", "\"]\"");
             }
             Item rb = item;
-            advance();
-            return SubqueryExpr.of(e,
+            // 检查/构造在 ] 为当前单元时完成（Go 归约动作先于前瞻；
+            // SubqueryExpr EndPos 为结构值 rb.pos+1，与 lastClosing 无关）。
+            Expr sq = SubqueryExpr.of(e,
                     literalNanos(rangePart), asDurationExpr(rangePart),
                     0L, null, null, StartOrEnd.NONE,
                     literalNanos(stepPart), asDurationExpr(stepPart),
                     rb.pos() + 1);
+            advance(); // 消费 ]
+            return sq;
         }
         if (item.typ() != ItemType.RIGHT_BRACKET) {
             unexpected("subquery or range", "\":\" or \"]\"");
         }
         Item rb = item;
-        advance();
         // Go：mergeRanges(左方括号, 右方括号) → [lb.pos, rb.pos+1)，覆盖整个方括号对。
+        // matrix_selector 归约动作先于前瞻：检查与 EndPos（lastClosing 此刻
+        // 为 ] 末尾）都不受其后 token 影响。
         PositionRange errRange = new PositionRange(lb.pos(), rb.pos() + 1);
         if (!(e instanceof VectorSelector vs)) {
             fail(errRange, "ranges only allowed for vector selectors");
@@ -883,7 +949,9 @@ public final class Parser {
         } else if (vs.timestamp() != null || vs.startOrEnd() != StartOrEnd.NONE) {
             fail(errRange, "no @ modifiers allowed before range");
         }
-        return MatrixSelector.of(e, literalNanos(rangePart), asDurationExpr(rangePart), lastClosing);
+        MatrixSelector ms = MatrixSelector.of(e, literalNanos(rangePart), asDurationExpr(rangePart), lastClosing);
+        advance(); // 消费 ]
+        return ms;
     }
 
     /** 正时长（positive_duration_expr）：数字字面量必须 &gt; 0。 */
@@ -897,7 +965,7 @@ public final class Parser {
 
     /** Go {@code time.Duration(math.Round(nl.Val * float64(time.Second)))}；非数字字面量为 0。 */
     private static long literalNanos(Expr e) {
-        return e instanceof NumberLiteral nl ? Math.round(nl.val() * 1e9) : 0L;
+        return e instanceof NumberLiteral nl ? goRoundToLong(nl.val() * 1e9) : 0L;
     }
 
     private static DurationExpr asDurationExpr(Expr e) {
@@ -907,6 +975,22 @@ public final class Parser {
     // ====================================================================
     // offset / @ / anchored / smoothed 修饰符（不可变重建版）
     // ====================================================================
+
+    /**
+     * offset/尾随修饰符构造用的 End：Go 归约于时长尾 token、拉前瞻前。
+     * {@link #parseOffsetDuration()} 值解析尾部的 advance 若拉到 closer
+     * （如聚合右括号）会把 lastClosing 再推一步——尾 token 自身恒为
+     * closer，污染至多一步；当前前瞻 token 为 closer 时回退用
+     * {@link #prevClosing}，否则 lastClosing 未被污染直接可用。
+     */
+    private int modifierEnd() {
+        return isCloser(item.typ()) ? prevClosing : lastClosing;
+    }
+
+    private static boolean isCloser(ItemType t) {
+        return t == ItemType.RIGHT_BRACE || t == ItemType.RIGHT_PAREN || t == ItemType.RIGHT_BRACKET
+                || t == ItemType.DURATION || t == ItemType.NUMBER;
+    }
 
     /**
      * Go {@code addOffset} / {@code addOffsetExpr} 合并实现：
@@ -919,7 +1003,7 @@ public final class Parser {
             }
             return VectorSelector.of(vs.name(), offsetNs, offsetExpr, vs.timestamp(), vs.startOrEnd(),
                     vs.labelMatchers(), vs.anchored(), vs.smoothed(),
-                    withEnd(vs.positionRange(), lastClosing));
+                    withEnd(vs.positionRange(), modifierEnd()));
         }
         if (e instanceof MatrixSelector ms) {
             VectorSelector vs = ms.vectorSelector() instanceof VectorSelector v ? v : null;
@@ -931,14 +1015,14 @@ public final class Parser {
             }
             VectorSelector nvs = VectorSelector.of(vs.name(), offsetNs, offsetExpr, vs.timestamp(),
                     vs.startOrEnd(), vs.labelMatchers(), vs.anchored(), vs.smoothed(), vs.positionRange());
-            return MatrixSelector.of(nvs, ms.range(), ms.rangeExpr(), lastClosing);
+            return MatrixSelector.of(nvs, ms.range(), ms.rangeExpr(), modifierEnd());
         }
         if (e instanceof SubqueryExpr sq) {
             if (sq.originalOffset() != 0 || sq.originalOffsetExpr() != null) {
                 fail(e.positionRange(), "offset may not be set multiple times");
             }
             return SubqueryExpr.of(sq.expr(), sq.range(), sq.rangeExpr(), offsetNs, offsetExpr,
-                    sq.timestamp(), sq.startOrEnd(), sq.step(), sq.stepExpr(), lastClosing);
+                    sq.timestamp(), sq.startOrEnd(), sq.step(), sq.stepExpr(), modifierEnd());
         }
         fail(e.positionRange(), "offset modifier must be preceded by an instant vector selector or range vector selector or a subquery");
         return null;
@@ -956,8 +1040,11 @@ public final class Parser {
             if (item.typ() != ItemType.RIGHT_PAREN) {
                 unexpected("@", "timestamp");
             }
-            advance();
-            return applyAt(e, null, kw.typ() == ItemType.START ? StartOrEnd.START : StartOrEnd.END);
+            // setAtModifierPreprocessor 归约动作先于前瞻（applyAt 用
+            // lastClosing=) 末尾构造 EndPos）。
+            Expr res = applyAt(e, null, kw.typ() == ItemType.START ? StartOrEnd.START : StartOrEnd.END);
+            advance(); // 消费 )
+            return res;
         }
         double sign = 1;
         if (item.typ() == ItemType.ADD || item.typ() == ItemType.SUB) {
@@ -967,10 +1054,13 @@ public final class Parser {
         if (item.typ() != ItemType.NUMBER && item.typ() != ItemType.DURATION) {
             unexpected("@", "timestamp");
         }
+        // Go：signed_or_unsigned_number 归约（含数值解析错误）与
+        // step_invariant_expr 归约（setTimestamp 检查/构造）都在拉取前瞻前。
         Item num = item;
-        advance();
         double v = sign * numberOrDurationSeconds(num);
-        return setTimestamp(e, v);
+        Expr res = setTimestamp(e, v);
+        advance(); // 消费数字/时长
+        return res;
     }
 
     /** Go {@code setTimestamp}：界检查 + 应用（Go timestamp.FromFloatSeconds 为毫秒精度）。 */
@@ -979,7 +1069,39 @@ public final class Parser {
                 || ts >= (double) Long.MAX_VALUE || ts <= (double) Long.MIN_VALUE) {
             fail(e.positionRange(), String.format("timestamp out of bounds for @ modifier: %s", formatF6(ts)));
         }
-        return applyAt(e, Math.round(ts * 1000), null);
+        return applyAt(e, fromFloatSeconds(ts), null);
+    }
+
+    /**
+     * Go {@code timestamp.FromFloatSeconds}：
+     * {@code int64(math.Round(ts * 1000))}。界检查针对<b>秒</b>（先于
+     * 换算），乘 1000 后仍可能超出 int64——Go 在 amd64 上的 float64→int64
+     * 转换（CVTTSD2SI）越界时返回 {@code 0x8000000000000000}（即
+     * {@link Long#MIN_VALUE}，作为<b>合法值</b>继续使用，打印为
+     * {@code foo @ -9223372036854776.000}）。此处显式移植该平台语义。
+     */
+    private static long fromFloatSeconds(double ts) {
+        return goRoundToLong(ts * 1000);
+    }
+
+    /**
+     * Go {@code math.Round}（双精度域内半离零，负数与 Java
+     * {@link Math#round} 的半上取整不同）后按 amd64 CVTTSD2SI 语义转 long。
+     */
+    private static long goRoundToLong(double x) {
+        double r = goRound(x);
+        if (Double.isNaN(r) || r >= 9.223372036854776E18 || r < -9.223372036854776E18) {
+            return Long.MIN_VALUE;
+        }
+        return (long) r;
+    }
+
+    /** Go {@code math.Round}：|x|≥2^52 时无小数部分直接返回。 */
+    private static double goRound(double x) {
+        if (Math.abs(x) >= 0x1.0p52) {
+            return x;
+        }
+        return x < 0 ? Math.ceil(x - 0.5) : Math.floor(x + 0.5);
     }
 
     /** Go {@code getAtModifierVars} + 写回：定位目标选择器、查重、重建（preproc 为 null 时归一化为 NONE）。 */
@@ -1124,7 +1246,11 @@ public final class Parser {
                 advance();
                 return applyUnaryOpToDurationExpr(op, inner, true);
             }
-            unexpected("offset", "number, duration, step(), or range()");
+            // unary_op duration_expr 备选（.y offset_duration_expr）：操作数为
+            // 一般时长表达式——覆盖 -(step() + 5m)、- -(5) 等（probe：
+            // foo offset - -(5) 在 Go 合法）；不可起始时长表达式的 token
+            // 由 parseDurationUnary 以同上下文（“offset”）兜底报错。
+            return applyUnaryOpToDurationExpr(op, parseDurationExpr("offset"), false);
         }
         if (item.typ() == ItemType.STEP || item.typ() == ItemType.RANGE) {
             return durationCall();
@@ -1883,6 +2009,30 @@ public final class Parser {
         return t == ItemType.NUMBER || t == ItemType.DURATION || t == ItemType.ADD || t == ItemType.SUB
                 || t == ItemType.STEP || t == ItemType.RANGE || t == ItemType.MAX_OF
                 || t == ItemType.MIN_OF || t == ItemType.LEFT_PAREN;
+    }
+
+    /**
+     * 通用语法错误的上下文：聚合体内为 {@code "aggregation"}
+     * （{@code aggregate_op error} 产生式），否则为空（顶层兜底 error
+     * 产生式）。probe：{@code sum(ln(>))} → “in aggregation”，
+     * {@code ln(>)} → 无上下文。
+     */
+    private String aggCtx() {
+        return inAggregation ? "aggregation" : "";
+    }
+
+    /**
+     * expr 可由此词法单元起始（FIRST(expr)：字面量/括号/花括号/一元符号/
+     * 可作指标名的全部保留字）。用于 function_call_args 的
+     * trailing-commas 判定：逗号后跟不可起始表达式的 token 时，Go 先归约
+     * {@code function_call_args COMMA} 报 trailing commas。
+     */
+    private static boolean canStartExpr(ItemType t) {
+        return t == ItemType.NUMBER || t == ItemType.DURATION || t == ItemType.STRING
+                || t == ItemType.LEFT_PAREN || t == ItemType.LEFT_BRACE
+                || t == ItemType.ADD || t == ItemType.SUB
+                || t == ItemType.IDENTIFIER || t == ItemType.METRIC_IDENTIFIER
+                || t.isAggregator() || isMetricIdentifier(t);
     }
 
     private static BinaryOp binaryOpOf(ItemType t) {

@@ -51,6 +51,9 @@ ExemplarsData exs = client.queryExemplars("http_requests_total", null, null);
   不参与 equals/hashCode；`Visitor`/`Inspector`/`Walk` 遍历设施齐备。
 - **Go 对齐的错误信息**：`PromqlParseException`（unchecked）携带
   `List<ParseError>`，首错的位置与消息与 Go 逐字一致。
+- **三重 Go oracle 背书**：官方 352 条表 + 10049 条 strconv 黄金向量 +
+  4935 条差分模糊语料（突变+文法随机游走+病态探针，ok 行打印逐字相等、
+  fail 行首错位置/消息逐字相等），再生成见 `scripts/fuzz-oracle`。
 - **零运行时依赖**。
 
 ### prometheus-api
@@ -77,10 +80,11 @@ ExemplarsData exs = client.queryExemplars("http_requests_total", null, null);
 要求：JDK 17+（工具链 21+ 时按 release 17 编译）。
 
 ```bash
-mvn test            # 582 用例：promql-core 526 + prometheus-api 56
+mvn test            # 583 用例：promql-core 527 + prometheus-api 56
 mvn test -pl promql-core            # 仅语法库（352 官方表 + 22 AST 抽样
                                     #  + 45 字符串→AST + 92 打印黄金 + 14 AST→字符串
-                                    #  + 1 GoFloat 黄金向量〔10049 条 Go oracle〕）
+                                    #  + 1 GoFloat 黄金向量〔10049 条 Go oracle〕
+                                    #  + 1 差分模糊〔4935 条 Go oracle 全量重放〕）
 mvn test -pl prometheus-api -am     # 客户端（27 binder golden + 23 基类矩阵
                                     #  + 6 真传输 HttpServer 集成）
 mvn -pl promql-bench -am package && java -jar promql-bench/target/bench.jar
@@ -137,8 +141,10 @@ promql-core/                    # PromQL 语法库（零依赖）
 └── src/test/                   # 双向测试：ParserConformanceTest（352 官方表）、
                                 # ParserAstConformanceTest（22）、StringToAstTest（45）、
                                 # PrinterGoldenTest（92）、AstToStringTest（14）、
-                                # GoFloatVectorTest（10049 条 Go oracle 黄金向量）
-                                # + resources/（parse_test_cases.tsv、gofloat_vectors.tsv）
+                                # GoFloatVectorTest（10049 条 Go oracle 黄金向量）、
+                                # ParserFuzzDifferentialTest（4935 条差分模糊全量重放）
+                                # + resources/（parse_test_cases.tsv、gofloat_vectors.tsv、
+                                #   fuzz_diff_cases.tsv）
 
 prometheus-api/                 # Prometheus HTTP API 客户端（依赖 promql-core + Gson）
 ├── src/main/java/com/promql/
@@ -159,7 +165,8 @@ prometheus-api/                 # Prometheus HTTP API 客户端（依赖 promql-
 
 extract_cases.py                # parse_test.go → parse_test_cases.tsv 提取器
 scripts/                        # check-snapshot.sh（快照 vs 上游 tag 漂移检测）、
-                                # gen_gofloat_vectors.go（GoFloat 黄金向量 Go oracle）
+                                # gen_gofloat_vectors.go（GoFloat 黄金向量 Go oracle）、
+                                # fuzz-oracle/（差分模糊语料生成器 + probe/tree 排查工具）
 promql-bench/                   # JMH 基准（ParsePrintBenchmark / BindBenchmark）
 docs/                           # promql 参考快照 + adr/
 ```

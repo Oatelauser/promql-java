@@ -75,7 +75,13 @@ Java 17 的 PromQL 解析/打印库。本文记录：源文件 ↔ Java 类型�
    Go 文法动作对语法错误也是"记录后继续"（yacc error recovery），最终返回
    完整 `ParseErrors` 列表；本库遇**语法**错误立即中止（Q7 的 unchecked 异常
    携带已累积列表），`checkAST` 类语义错误仍按 Go 累积。一致性测试因此只
-   比对**第一条**错误的位置与消息（352 条官方用例全过）。
+   比对**第一条**错误的位置与消息。**首错的"内容"已全量对齐 Go**（差分
+   模糊 4935 条 0 分歧，见 §4），关键移植点：goyacc 的归约动作发生在
+   移进构造尾 token 之后、拉取前瞻**之前**——语义检查（未知函数、
+   no-arguments、@/offset/range 前置条件等）与节点 End（`lastClosing`）
+   都在读取前瞻前完成（解析器"停右括号约定"）；词法 ERROR 则"记录后
+   按EOF继续、后续语法错误静默"（Go `parser.Error` 为空操作 +
+   `unexpected` 跳过 ERROR 项的合成本）。
 
 2. **位置偏移：UTF-16 代码单元 vs 字节。**
    Go `PositionRange` 是字节偏移；Java `String` 索引是 UTF-16 代码单元。
@@ -115,7 +121,11 @@ Java 17 的 PromQL 解析/打印库。本文记录：源文件 ↔ Java 类型�
 6. **正则方言：RE2 vs `java.util.regex`。**
    标签匹配器的正则语法校验用 Java `Pattern.compile`。常见 POSIX 语法重叠；
    个别构造不同（命名分组 `(?P<name>)` vs `(?<name>)`、RE2 不支持的反向引用
-   在 Java 中合法）。语义求值不在本库范围（Q13 纯数据）。
+   在 Java 中合法）；**错误文本也不同**（RE2
+   ``missing argument to repetition operator: `*` `` vs Java
+   `Dangling meta character '*'`）。语义求值不在本库范围（Q13 纯数据）。
+   差分模糊测试对该类首错取**前缀容差**（双方均以
+   `error parsing regexp:` 开头即视为同类），语料中 2 条按此口径放行。
 
 7. **浮点解析细节。**
    `GoFloat.parseFloat` 模拟 `strconv.ParseFloat`：接受 `Inf`/`Infinity`/
@@ -161,6 +171,13 @@ docs/promql/parser/parse_test.go ──extract_cases.py──▶ parse_test_case
 scripts/gen_gofloat_vectors.go ──go run──▶ gofloat_vectors.tsv（10049 条）
                                                     │
                                         GoFloatVectorTest（Go strconv 黄金向量）
+
+scripts/fuzz-oracle/main.go ──go run .──▶ fuzz_diff_cases.tsv（4935 条差分语料）
+        │   （Go oracle = 上游 parser 同 commit，突变+文法随机游走+病态探针，
+        │    语料强制 ASCII：Go 字节偏移 == Java UTF-16 索引，分歧 2 不触发）
+        │   probe/（多错误探针）、tree/（AST 区间转储）为排查工具，不产语料
+        └──▶ ParserFuzzDifferentialTest（全量重放：ok 行打印逐字相等
+             + fail 行首错位置/消息逐字相等；分歧 6 正则错误按前缀容差）
 ```
 
 - `extract_cases.py`：解析 Go `testExpr` 表（含 `fmt.Sprintf`/`strings.Repeat`
@@ -183,6 +200,18 @@ scripts/gen_gofloat_vectors.go ──go run──▶ gofloat_vectors.tsv（10049
   `TestBinaryExprUTF8Labels` 6 条逐字移植——断言打印**内容**（而非幂等）。
 - `AstToStringTest`（AST→字符串）：14 组手造 AST 直接喂 `Printer`，含
   `TestVectorSelector_String` 8 例；全程不经过解析器。
+- `scripts/fuzz-oracle`（差分模糊，Go oracle）：以官方 352 条为种子的确定性
+  突变（每种子 12 条：删/插/换/交换/截断/重复/尾接/双重）+ 文法随机游走
+  （700 条，深度≤5）+ 病态深度探针（括号/二元链/子查询/时长表达式嵌套），
+  共 **4935 条**（1173 ok / 3762 fail），逐条记录 Go 的判定——ok 行含
+  `expr.String()` 打印输出，fail 行含首错位置与消息。TSV 六列：
+  `ok(1/0)`、`errStart`、`errEnd`、`errMsg`、`input`、`printed`（转义
+  同上）。`ParserFuzzDifferentialTest` 全量重放（资源缺失时跳过）；再生成
+  需 Go 工具链：`cd scripts/fuzz-oracle && go run .`（产物入库，提交前
+  复跑差分测试）。该语料接入后驱动了 7 类根因修复（ItemTypeStr 的
+  NUMBER 误并、GoFloat 错误文本、归约前检查/End 快照、词法 ERROR 挂起、
+  @ 修饰符 amd64 溢出语义、offset 嵌套一元、聚合错误上下文），是本库
+  除官方用例外最强的一致性背书。
 - 词法器无独立单测，由上述用例间接全覆盖；打印器有独立单测（后三类）。
 
 ## 5. 特性开关映射
