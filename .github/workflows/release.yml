@@ -1,17 +1,18 @@
 name: Release
 
 # 发布流程（详见 RELEASE.md）：推送 v* 标签触发——
-#   1) mvn -P release deploy：测试全量 + 发布 promql-core / prometheus-api 的
-#      jar/sources/javadoc 到 GitHub Packages（promql-bench 经 maven.deploy.skip
-#      排除）；setup-java 的 server-id: github 注入 GITHUB_ACTOR/GITHUB_TOKEN。
-#   2) gh release create：建 GitHub Release 页并自动生成变更说明。
+#   1) 导入 GPG 私钥（Secret GPG_PRIVATE_KEY，免口令密钥）；
+#   2) 用 CENTRAL_USERNAME/CENTRAL_PASSWORD 渲染 runner 临时 settings.xml；
+#   3) mvn -P release deploy：测试全量 + promql-core / prometheus-api 的
+#      jar/sources/javadoc 签名（gpg）后经 central-publishing 上传 Maven Central
+#      （promql-bench 经 excludeArtifacts 排除）；上传至 VALIDATED 待人工 Publish。
+#   4) gh release create：建 GitHub Release 页并自动生成变更说明。
 on:
   push:
     tags: ['v*']
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
   publish:
@@ -23,9 +24,39 @@ jobs:
           distribution: temurin
           java-version: 21
           cache: maven
-          server-id: github # 与父 pom distributionManagement/repository/id 对应
-      - name: Test & deploy to GitHub Packages
+      - name: Import GPG signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          gpg --list-secret-keys --keyid-format long
+      - name: Generate settings.xml from secrets
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+        run: |
+          mkdir -p ~/.m2
+          cat > ~/.m2/settings.xml <<EOF
+          <settings xmlns="http://maven.apache.org/SETTINGS/1.2.0">
+            <servers>
+              <server>
+                <id>central</id>
+                <username>${CENTRAL_USERNAME}</username>
+                <password>${CENTRAL_PASSWORD}</password>
+              </server>
+            </servers>
+          </settings>
+          EOF
+      - name: Test, sign and deploy to Maven Central
         run: mvn -B -ntp -P release deploy
+      - name: Upload deploy log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-deploy-log
+          path: |
+            **/target/central-publishing/**
+          retention-days: 7
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}

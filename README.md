@@ -108,7 +108,7 @@ mvn -pl promql-bench -am package && java -jar promql-bench/target/bench.jar
                                     # JMH 基准（手动；例：'ParsePrintBenchmark.parse -p query=up'）
 ```
 
-Maven 坐标（安装到本地库 `mvn install` 后可用）：
+Maven 坐标（Maven Central，发布后免认证可用；发布前可 `mvn install` 装进本地库）：
 
 ```xml
 <!-- 仅语法层 -->
@@ -136,9 +136,10 @@ Maven 坐标（安装到本地库 `mvn install` 后可用）：
   最低支持运行时——其 `Double.toString` 仍是旧 FloatingDecimal，GoFloat
   快速路径的最短性守卫在该运行时常态走退回分支，慢路径随之持续回归。
 - **发布**：推送 `v*` 标签触发 [release 工作流](.github/workflows/release.yml)
-  ——全量测试后把 `promql-core` / `prometheus-api`（jar + sources + javadoc）
-  发到 GitHub Packages 并建 Release 页，测试不过不发布。步骤、本地预演与
-  消费方接入见 [RELEASE.md](RELEASE.md)。
+  ——全量测试后将 `promql-core` / `prometheus-api`（jar + sources + javadoc，
+  gpg 签名）上传 Maven Central 并建 Release 页，测试不过不上传；Portal 上
+  人工确认 Publish 后生效。步骤、一次性准备（Token/GPG/Secrets）与消费方
+  接入见 [RELEASE.md](RELEASE.md)。
 
 ## 与 Go 实现的关系
 

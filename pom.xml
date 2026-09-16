@@ -15,21 +15,26 @@
         prometheus-api：对接 Prometheus HTTP API 响应的客户端（仅依赖 promql-core 与 Gson）。</description>
     <url>https://github.com/Oatelauser/promql-java</url>
 
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <id>oatelauser</id>
+            <name>oatelauser</name>
+            <url>https://github.com/Oatelauser</url>
+        </developer>
+    </developers>
+
     <scm>
         <connection>scm:git:https://github.com/Oatelauser/promql-java.git</connection>
         <developerConnection>scm:git:git@github.com:Oatelauser/promql-java.git</developerConnection>
         <url>https://github.com/Oatelauser/promql-java</url>
     </scm>
-
-    <!-- 发布目标：GitHub Packages（release.yml 以 GITHUB_TOKEN 认证；
-         promql-bench 经 maven.deploy.skip 排除）。流程见 RELEASE.md。 -->
-    <distributionManagement>
-        <repository>
-            <id>github</id>
-            <name>GitHub Packages</name>
-            <url>https://maven.pkg.github.com/Oatelauser/promql-java</url>
-        </repository>
-    </distributionManagement>
 
     <modules>
         <module>promql-core</module>
@@ -105,12 +110,30 @@
         </pluginManagement>
     </build>
 
-    <!-- 发布 profile：随 release.yml（tag v*）触发；本地可 mvn -P release package 预演 -->
+    <!-- 发布 profile：随 release.yml（tag v*）触发，发布到 Maven Central
+         （central.sonatype.com，Central Portal）。本地可 mvn -P release package 预演
+         （sources/javadoc/gpg 签名构件生成，不上传）。
+         promql-bench 经 central-publishing 的 excludeArtifacts 排除——
+         maven.deploy.skip 对该插件无效（无 sources/javadoc 的模块混入 bundle
+         会被 Central 校验整体拒绝）。流程与踩坑见 RELEASE.md。 -->
     <profiles>
         <profile>
             <id>release</id>
             <build>
                 <plugins>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.8.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <!-- 不发布的模块（按 artifactId 匹配） -->
+                            <excludeArtifacts>
+                                <artifactId>promql-bench</artifactId>
+                            </excludeArtifacts>
+                        </configuration>
+                    </plugin>
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-source-plugin</artifactId>
@@ -135,8 +158,27 @@
                             </execution>
                         </executions>
                     </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.7</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
                 </plugins>
             </build>
+            <distributionManagement>
+                <snapshotRepository>
+                    <id>central</id>
+                    <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+                </snapshotRepository>
+            </distributionManagement>
         </profile>
     </profiles>
 </project>
