@@ -6,7 +6,7 @@
 
     <groupId>io.github.oatelauser</groupId>
     <artifactId>promql-java</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>promql-java</name>

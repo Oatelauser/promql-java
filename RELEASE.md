@@ -11,6 +11,16 @@
 > Central 发布**不可撤销**：版本一经 Publish 即永久占用坐标。Publish 由人在
 > Portal 上最终确认（CI 只做到 VALIDATED），保留人工闸门。
 
+## 待发布事项（下次发版前必读）
+
+- **1.0.1 起已含 GoFloat JDK 17 修复**（`shortest()` 逐档循环上界补齐 17 位档）。
+  背景：**已发布的 1.0.0 带着该 bug**——JDK 17/18 运行时上，最短往返表示恰好
+  需要 17 位有效数字的浮点值会多输出一位（如 `103933059052175632` vs Go 的
+  `103933059052175630`）；仅字节级保真度分歧，数值可正确往返解析，不影响
+  PromQL 语义，JDK 19+ 运行时不受影响。由 CI 的 JDK 17 矩阵腿抓出
+  （10049 条 Go oracle 黄金向量中的 `bits=437713e910939811` 一例）。
+  **发版后把本条移出本节。**
+
 ## 一次性准备（spring-plus-framework 发布时已办过则全部复用）
 
 1. **Central 账号与命名空间**：[central.sonatype.com](https://central.sonatype.com)
@@ -55,6 +65,7 @@ settings.xml → `mvn -B -ntp -P release deploy`——含全量测试，任一�
 
 ## 发布前检查单
 
+- [ ] **「待发布事项」一节已清空**（有残留条目即说明有事项需随本版带上或处置）。
 - [ ] `mvn -B -ntp verify` 双 JDK（17/21）在 CI 绿（推送分支后看 Actions）。
 - [ ] 4 个 pom 版本一致（`versions:set` 已保证；`grep -r "<version>" */pom.xml` 抽查）。
 - [ ] README 快速上手的用例数/坐标版本与实际一致。

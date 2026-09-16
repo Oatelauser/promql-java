@@ -85,7 +85,7 @@ public final class GoFloat {
             return (Double.doubleToRawLongBits(v) < 0) ? "-0" : "0";
         }
         // 快速路径：一次 toString + 一次回读 + 一次 BigDecimal 最短性校验，
-        // 命中时免去 1..16 档逐档 BigDecimal 构造（打印热路径的主体开销）。
+        // 命中时免去 1..17 档逐档 BigDecimal 构造（打印热路径的主体开销）。
         String java = Double.toString(v);
         String cand = javaToExpString(java);
         if (cand != null) {
@@ -96,7 +96,11 @@ public final class GoFloat {
                 return cand;
             }
         }
-        for (int p = 1; p < 17; p++) {
+        // 上界含 17：存在最短往返表示恰好需要 17 位有效数字的 double（17 位是
+        // 往返保证上界）。JDK 17 运行时快速路径被守卫正确拒绝后若只试到 16 档，
+        // 会落到兜底 Double.toString——旧 FloatingDecimal 的多一位输出
+        // （10049 条黄金向量中 bits=437713e910939811 一例，CI JDK 17 抓出）。
+        for (int p = 1; p <= 17; p++) {
             BigDecimal c = new BigDecimal(v, new MathContext(p, RoundingMode.HALF_EVEN))
                     .stripTrailingZeros();
             if (c.doubleValue() == v) {
