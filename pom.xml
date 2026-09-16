@@ -4,9 +4,9 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>com.promql</groupId>
+    <groupId>io.github.oatelauser</groupId>
     <artifactId>promql-java</artifactId>
-    <version>0.1.0</version>
+    <version>1.0.0</version>
     <packaging>pom</packaging>
 
     <name>promql-java</name>
@@ -50,12 +50,12 @@
         <dependencies>
             <!-- 模块间依赖 -->
             <dependency>
-                <groupId>com.promql</groupId>
+                <groupId>io.github.oatelauser</groupId>
                 <artifactId>promql-core</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.promql</groupId>
+                <groupId>io.github.oatelauser</groupId>
                 <artifactId>prometheus-api</artifactId>
                 <version>${project.version}</version>
             </dependency>

@@ -1,7 +1,7 @@
 # RELEASE.md — 发布流程
 
-发布产物：**GitHub Packages** 上的 `com.promql:promql-core` 与
-`com.promql:prometheus-api`（jar + sources + javadoc；两模块同版本发布，
+发布产物：**GitHub Packages** 上的 `io.github.oatelauser:promql-core` 与
+`io.github.oatelauser:prometheus-api`（jar + sources + javadoc；两模块同版本发布，
 依赖经父 pom `dependencyManagement` 以 `${project.version}` 对齐）。
 `promql-bench` 不发布（`maven.deploy.skip`），其 shade 出的 `bench.jar`
 仅本地/CI 构建产物。发布同时创建 GitHub Release 页（自动生成变更说明）。
@@ -73,7 +73,7 @@ fine-grained token：
 </repositories>
 ```
 
-依赖坐标同 README（`com.promql:promql-core` / `com.promql:prometheus-api`）。
+依赖坐标同 README（`io.github.oatelauser:promql-core` / `io.github.oatelauser:prometheus-api`）。
 公开仓库（Maven Central）如后续需要，另建 Sonatype Central 流程
 （gpg 签名 + central-publishing 插件），当前不预设。
 

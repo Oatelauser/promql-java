@@ -113,21 +113,21 @@ Maven 坐标（安装到本地库 `mvn install` 后可用）：
 ```xml
 <!-- 仅语法层 -->
 <dependency>
-    <groupId>com.promql</groupId>
+    <groupId>io.github.oatelauser</groupId>
     <artifactId>promql-core</artifactId>
-    <version>0.1.0</version>
+    <version>1.0.0</version>
 </dependency>
 
 <!-- 语法层 + HTTP API 客户端（传递引入 Gson） -->
 <dependency>
-    <groupId>com.promql</groupId>
+    <groupId>io.github.oatelauser</groupId>
     <artifactId>prometheus-api</artifactId>
-    <version>0.1.0</version>
+    <version>1.0.0</version>
 </dependency>
 ```
 
-主要入口：`com.promql.Promql`（解析门面）与
-`com.promql.api.JdkHttpPrometheusClient` / `AbstractPrometheusClient`（客户端）。
+主要入口：`io.github.oatelauser.promql.Promql`（解析门面）与
+`io.github.oatelauser.promql.api.JdkHttpPrometheusClient` / `AbstractPrometheusClient`（客户端）。
 实验开关见 `ParserOptions`（默认全关）。
 
 ## CI 与发布
@@ -154,7 +154,7 @@ Maven 坐标（安装到本地库 `mvn install` 后可用）：
 
 ```
 promql-core/                    # PromQL 语法库（零依赖）
-├── src/main/java/com/promql/
+├── src/main/java/io/github/oatelauser/promql/
 │   ├── Promql.java             # 门面：parse / tryParse / parseMetricSelector / parseMetric / print
 │   ├── ast/                    # sealed AST（record + 枚举 + Visitor/Inspector/Walk）
 │   ├── parser/                 # Parser（递归下降+优先级爬升）、ParserOptions、异常
@@ -174,7 +174,7 @@ promql-core/                    # PromQL 语法库（零依赖）
                                 #   fuzz_diff_cases.tsv）
 
 prometheus-api/                 # Prometheus HTTP API 客户端（依赖 promql-core + Gson）
-├── src/main/java/com/promql/
+├── src/main/java/io/github/oatelauser/promql/
 │   ├── api/                    # AbstractPrometheusQueryClient（父层：传输核心+查询端点）、
 │   │                           # AbstractPrometheusClient（子层：+查询族端点）、
 │   │                           # JdkHttpPrometheusClient（JDK HttpClient 默认实现）、

@@ -40,7 +40,7 @@ Java 17 的 PromQL 解析/打印库。本文记录：源文件 ↔ Java 类型�
 
 ## 2. 文件映射表
 
-| Go 源（docs/promql/…） | Java（com.promql.…） | 说明 |
+| Go 源（docs/promql/…） | Java（io.github.oatelauser.promql.…） | 说明 |
 |---|---|---|
 | `parser/lex.go` | `lexer/Lexer.java`、`lexer/Item.java`、`lexer/ItemType.java` | 状态机逐字移植；三引风格（`"`/`'`/`` ` ``）与嵌套括号深度都保留 |
 | `parser/generated_parser.y`（+ `.y.go`） | `parser/Parser.java` | **手写递归下降 + 优先级爬升**，非 yacc 生成（Q8，ADR-0001）；文法优先级/结合性/语义动作逐条对齐 `.y` |
